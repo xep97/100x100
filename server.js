@@ -1,60 +1,81 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const GRID_SIZE = 100;
-const COOLDOWN_MS = 60000;
+// --- SUPABASE CONFIG ---
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// State management
-let grid = Array(GRID_SIZE * GRID_SIZE).fill('#ffffff');
-let counts = Array(GRID_SIZE * GRID_SIZE).fill(0);
+let grid = [];
+let counts = [];
 let totalChanges = 0;
-let ipCooldowns = new Map(); // Tracking by IP now
+const ipCooldowns = new Map();
+
+// Load data from Supabase once when the server starts
+async function loadInitialData() {
+    try {
+        const { data, error } = await supabase
+            .from('canvas_state')
+            .select('*')
+            .eq('id', 1)
+            .single();
+        
+        if (error) throw error;
+
+        grid = data.grid;
+        counts = data.counts;
+        totalChanges = data.total_changes;
+        console.log("✅ Data loaded from Supabase");
+    } catch (err) {
+        console.error("❌ Failed to load data:", err.message);
+    }
+}
+loadInitialData();
 
 app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
 
 io.on('connection', (socket) => {
-    const userIP = socket.handshake.address;
+    // Render uses a proxy, so we check x-forwarded-for for the real IP
+    const userIP = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
 
-    // Send initial state and current user's specific cooldown
     const lastMove = ipCooldowns.get(userIP) || 0;
-    const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - lastMove));
-    
-    socket.emit('init', { 
-        grid, 
-        counts, 
-        totalChanges, 
-        cooldownRemaining: remaining 
-    });
+    const remaining = Math.max(0, 60000 - (Date.now() - lastMove));
 
+    socket.emit('init', { grid, counts, totalChanges, cooldownRemaining: remaining });
     io.emit('userCount', io.engine.clientsCount);
 
-    socket.on('changeSquare', ({ index, color }) => {
+    socket.on('changeSquare', async ({ index, color }) => {
         const now = Date.now();
         const lastMove = ipCooldowns.get(userIP) || 0;
 
-        if (now - lastMove < COOLDOWN_MS) {
-            socket.emit('error', 'Cooldown active');
-            return;
-        }
+        if (now - lastMove < 60000) return;
 
-        if (index >= 0 && index < grid.length) {
-            grid[index] = color;
-            counts[index]++;
-            totalChanges++;
-            ipCooldowns.set(userIP, now); // Update the IP map
+        // 1. Update local memory (Instant response)
+        grid[index] = color;
+        counts[index]++;
+        totalChanges++;
+        ipCooldowns.set(userIP, now);
 
-            // Broadcast the change and the 60s cooldown to the specific user
-            io.emit('update', { index, color, count: counts[index], totalChanges });
-            socket.emit('startTimer', COOLDOWN_MS);
-        }
+        // 2. Tell everyone (Real-time)
+        io.emit('update', { index, color, count: counts[index], totalChanges });
+        socket.emit('startTimer', 60000);
+
+        // 3. Update Supabase (Background)
+        const { error } = await supabase
+            .from('canvas_state')
+            .update({ grid, counts, total_changes: totalChanges })
+            .eq('id', 1);
+        
+        if (error) console.error("Database sync error:", error.message);
     });
 
     socket.on('disconnect', () => io.emit('userCount', io.engine.clientsCount));
 });
 
-server.listen(3000, () => console.log('Secure Canvas server running...'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
