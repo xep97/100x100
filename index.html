@@ -1,67 +1,112 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Socket Canvas</title>
+    <title>Socket Canvas (Canvas API)</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #f4f4f4; }
-        #stats { margin: 20px; font-weight: bold; }
-        #grid { 
-            display: grid; 
-            grid-template-columns: repeat(100, 10px); 
-            grid-template-rows: repeat(100, 10px); 
-            gap: 0; 
-            width: 1000px; 
-            margin: 0 auto; 
-            border: 1px solid #ccc;
+        body { font-family: sans-serif; text-align: center; background: #222; color: white; }
+        #stats { margin: 15px; font-size: 1.1em; }
+        #canvas-container { position: relative; display: inline-block; cursor: crosshair; }
+        canvas { border: 2px solid #555; background: white; image-rendering: pixelated; }
+        #tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 5px;
+            border-radius: 3px;
+            font-size: 12px;
+            pointer-events: none;
+            display: none;
         }
-        .cell { width: 10px; height: 10px; border: 0.1px solid #eee; }
-        .cell:hover { border: 1px solid black; cursor: crosshair; }
+        .controls { margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <h1>Global Collaborative Canvas</h1>
+    <h1>Real-time Canvas</h1>
     <div id="stats">
-        Total Changes: <span id="total">0</span> | 
-        Online: <span id="online">0</span>
+        Total Changes: <span id="total">0</span> | Online: <span id="online">0</span>
     </div>
-    <input type="color" id="colorPicker" value="#000000">
-    <div id="grid"></div>
+    
+    <div class="controls">
+        <input type="color" id="colorPicker" value="#ff0000">
+        <span id="cooldownText">Ready!</span>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="pixelCanvas" width="1000" height="1000"></canvas>
+        <div id="tooltip"></div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        const gridElement = document.getElementById('grid');
+        const canvas = document.getElementById('pixelCanvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
         const totalEl = document.getElementById('total');
         const onlineEl = document.getElementById('online');
         const colorPicker = document.getElementById('colorPicker');
 
-        // Initialize the grid cells
-        for (let i = 0; i < 10000; i++) {
-            const cell = document.createElement('div');
-            cell.className = 'cell';
-            cell.id = `cell-${i}`;
-            cell.onclick = () => socket.emit('changeSquare', { index: i, color: colorPicker.value });
-            gridElement.appendChild(cell);
+        const SIZE = 100; // 100x100 grid
+        const PIXEL_SIZE = canvas.width / SIZE;
+        let countData = [];
+
+        // Draw a single square
+        function drawSquare(index, color) {
+            const x = (index % SIZE) * PIXEL_SIZE;
+            const y = Math.floor(index / SIZE) * PIXEL_SIZE;
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
+            // Draw faint grid lines
+            ctx.strokeStyle = "rgba(0,0,0,0.05)";
+            ctx.strokeRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
         }
 
+        // Handle Server Updates
         socket.on('init', ({ grid, counts, totalChanges }) => {
+            countData = counts;
             totalEl.innerText = totalChanges;
-            grid.forEach((color, i) => {
-                const cell = document.getElementById(`cell-${i}`);
-                cell.style.backgroundColor = color;
-                cell.title = `Changes: ${counts[i]}`;
-            });
+            grid.forEach((color, i) => drawSquare(i, color));
         });
 
         socket.on('update', ({ index, color, count, totalChanges }) => {
-            const cell = document.getElementById(`cell-${index}`);
-            cell.style.backgroundColor = color;
-            cell.title = `Changes: ${count}`;
+            countData[index] = count;
             totalEl.innerText = totalChanges;
+            drawSquare(index, color);
         });
 
         socket.on('userCount', (count) => onlineEl.innerText = count);
         socket.on('error', (msg) => alert(msg));
+
+        // Click Logic: Convert mouse coordinates to grid index
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const col = Math.floor(x / PIXEL_SIZE);
+            const row = Math.floor(y / PIXEL_SIZE);
+            const index = row * SIZE + col;
+
+            socket.emit('changeSquare', { index, color: colorPicker.value });
+        });
+
+        // Hover Logic: Show tooltip with change count
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const col = Math.floor(x / PIXEL_SIZE);
+            const row = Math.floor(y / PIXEL_SIZE);
+            const index = row * SIZE + col;
+
+            if (countData[index] !== undefined) {
+                tooltip.style.display = 'block';
+                tooltip.style.left = (x + 15) + 'px';
+                tooltip.style.top = (y + 15) + 'px';
+                tooltip.innerText = `Changes: ${countData[index]}`;
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => tooltip.style.display = 'none');
     </script>
 </body>
 </html>
