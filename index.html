@@ -7,33 +7,46 @@
             font-family: sans-serif; text-align: center; background: #1a1a1a; color: #eee; 
             margin: 0; padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh;
         }
-        #header { padding: 10px; background: #222; z-index: 10; border-bottom: 1px solid #333; }
+        #header { 
+            padding: 10px 20px; background: #222; z-index: 10; border-bottom: 1px solid #333; 
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header-left { text-align: left; }
         #cooldown-box { font-size: 1.5em; font-weight: bold; height: 1.2em; }
-        #stats { color: #888; font-size: 0.8em; }
+        #stats { color: #888; font-size: 0.9em; }
+        
         #palette { 
             display: flex; justify-content: center; gap: 5px; 
             padding: 10px; flex-wrap: wrap; background: #222; z-index: 10;
         }
         .swatch { width: 28px; height: 28px; border: 2px solid #444; cursor: pointer; border-radius: 4px; }
         .swatch.active { border-color: white; transform: scale(1.1); box-shadow: 0 0 10px rgba(255,255,255,0.3); }
+        
         #viewport { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
         #viewport:active { cursor: grabbing; }
         canvas { image-rendering: pixelated; display: block; }
+        
         #tooltip {
             position: absolute; background: rgba(0,0,0,0.9); color: white;
             padding: 5px 10px; border-radius: 4px; pointer-events: none; 
             display: none; z-index: 20; font-size: 12px; border: 1px solid #444;
         }
-        .ui-btns { position: absolute; bottom: 20px; right: 20px; z-index: 10; display: flex; gap: 10px; }
-        button { padding: 10px 15px; border-radius: 5px; border: none; background: #444; color: white; cursor: pointer; font-weight: bold; }
-        button:hover { background: #555; }
+        
+        button#downloadBtn { 
+            padding: 8px 15px; border-radius: 5px; border: none; 
+            background: #444; color: white; cursor: pointer; font-weight: bold; 
+        }
+        button#downloadBtn:hover { background: #00ff88; color: #1a1a1a; }
     </style>
 </head>
 <body>
 
     <div id="header">
-        <div id="cooldown-box">CONNECTING...</div>
-        <div id="stats">Total: <span id="total">0</span> | Online: <span id="online">0</span></div>
+        <div class="header-left">
+            <div id="cooldown-box">CONNECTING...</div>
+            <div id="stats">Total: <span id="total">0</span> | Online: <span id="online">0</span></div>
+        </div>
+        <button id="downloadBtn">Download PNG</button>
     </div>
     
     <div id="palette"></div>
@@ -41,10 +54,6 @@
     <div id="viewport">
         <canvas id="pixelCanvas"></canvas>
         <div id="tooltip"></div>
-        <div class="ui-btns">
-            <button onclick="resetView()">Reset View</button>
-            <button id="downloadBtn">Download PNG</button>
-        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
@@ -60,13 +69,12 @@
         const paletteEl = document.getElementById('palette');
 
         const SIZE = 100;
-        const PIXEL_DATA_SIZE = 10; // each grid pixel is 10 actual canvas units
+        const PIXEL_DATA_SIZE = 10;
         let countData = [];
         let gridData = [];
         let timerInterval;
         let selectedColor = "#000000";
 
-        // Camera / Viewport state
         let camera = { x: 0, y: 0, zoom: 1 };
         let isDragging = false;
         let lastMousePos = { x: 0, y: 0 };
@@ -74,7 +82,6 @@
 
         const colors = ["#000000", "#FFFFFF", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#800000", "#008000", "#000080", "#808000", "#800080", "#008080", "#808080", "#C0C0C0"];
 
-        // Init Palette
         colors.forEach((color, i) => {
             const swatch = document.createElement('div');
             swatch.className = 'swatch';
@@ -108,7 +115,6 @@
             ctx.save();
             ctx.translate(camera.x, camera.y);
             ctx.scale(camera.zoom, camera.zoom);
-
             for (let i = 0; i < SIZE * SIZE; i++) {
                 ctx.fillStyle = gridData[i];
                 ctx.fillRect((i % SIZE) * PIXEL_DATA_SIZE, Math.floor(i / SIZE) * PIXEL_DATA_SIZE, PIXEL_DATA_SIZE, PIXEL_DATA_SIZE);
@@ -116,7 +122,6 @@
             ctx.restore();
         }
 
-        // Pointer Controls
         viewport.addEventListener('pointerdown', (e) => {
             isDragging = true;
             lastMousePos = { x: e.clientX, y: e.clientY };
@@ -130,9 +135,7 @@
                 lastMousePos = { x: e.clientX, y: e.clientY };
                 render();
                 tooltip.style.display = 'none';
-            } else {
-                showTooltip(e);
-            }
+            } else { showTooltip(e); }
         });
 
         window.addEventListener('pointerup', (e) => {
@@ -208,8 +211,18 @@
                 tCtx.fillStyle = c;
                 tCtx.fillRect((i % SIZE) * PIXEL_DATA_SIZE, Math.floor(i / SIZE) * PIXEL_DATA_SIZE, PIXEL_DATA_SIZE, PIXEL_DATA_SIZE);
             });
+            
+            // Precise Date formatting: YYYY-MM-DD_HH-mm-ss
+            const now = new Date();
+            const dateStr = now.toISOString().split('T')[0];
+            const hh = now.getHours().toString().padStart(2, '0');
+            const mm = now.getMinutes().toString().padStart(2, '0');
+            const ss = now.getSeconds().toString().padStart(2, '0');
+            
             const link = document.createElement('a');
-            link.download = 'canvas.png'; link.href = temp.toDataURL(); link.click();
+            link.download = `canvas_${dateStr}_${hh}-${mm}-${ss}.png`;
+            link.href = temp.toDataURL();
+            link.click();
         };
 
         window.addEventListener('resize', () => { resize(); resetView(); });
