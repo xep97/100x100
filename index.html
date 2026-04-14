@@ -1,111 +1,218 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Secure IP-Based Canvas</title>
+    <title>Global Pixel Canvas</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: #eee; margin: 0; padding: 20px; }
-        #cooldown-box { font-size: 2em; font-weight: bold; margin: 10px; height: 1.2em; transition: color 0.3s; }
-        #stats { color: #888; margin-bottom: 20px; }
-        #canvas-container { position: relative; display: inline-block; background: white; border: 5px solid #333; }
-        canvas { image-rendering: pixelated; display: block; cursor: crosshair; }
+        body { 
+            font-family: sans-serif; text-align: center; background: #1a1a1a; color: #eee; 
+            margin: 0; padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh;
+        }
+        #header { padding: 10px; background: #222; z-index: 10; border-bottom: 1px solid #333; }
+        #cooldown-box { font-size: 1.5em; font-weight: bold; height: 1.2em; }
+        #stats { color: #888; font-size: 0.8em; }
+        #palette { 
+            display: flex; justify-content: center; gap: 5px; 
+            padding: 10px; flex-wrap: wrap; background: #222; z-index: 10;
+        }
+        .swatch { width: 28px; height: 28px; border: 2px solid #444; cursor: pointer; border-radius: 4px; }
+        .swatch.active { border-color: white; transform: scale(1.1); box-shadow: 0 0 10px rgba(255,255,255,0.3); }
+        #viewport { flex-grow: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+        #viewport:active { cursor: grabbing; }
+        canvas { image-rendering: pixelated; display: block; }
         #tooltip {
             position: absolute; background: rgba(0,0,0,0.9); color: white;
-            padding: 5px 10px; border-radius: 4px; pointer-events: none; display: none;
+            padding: 5px 10px; border-radius: 4px; pointer-events: none; 
+            display: none; z-index: 20; font-size: 12px; border: 1px solid #444;
         }
-        input[type="color"] { width: 60px; height: 30px; border: none; cursor: pointer; margin-bottom: 10px; }
+        .ui-btns { position: absolute; bottom: 20px; right: 20px; z-index: 10; display: flex; gap: 10px; }
+        button { padding: 10px 15px; border-radius: 5px; border: none; background: #444; color: white; cursor: pointer; font-weight: bold; }
+        button:hover { background: #555; }
     </style>
 </head>
 <body>
 
-    <div id="cooldown-box">CONNECTING...</div>
-    <div id="stats">Total: <span id="total">0</span> | Online: <span id="online">0</span></div>
+    <div id="header">
+        <div id="cooldown-box">CONNECTING...</div>
+        <div id="stats">Total: <span id="total">0</span> | Online: <span id="online">0</span></div>
+    </div>
     
-    <input type="color" id="colorPicker" value="#3498db">
+    <div id="palette"></div>
 
-    <div id="canvas-container">
-        <canvas id="pixelCanvas" width="600" height="600"></canvas>
+    <div id="viewport">
+        <canvas id="pixelCanvas"></canvas>
         <div id="tooltip"></div>
+        <div class="ui-btns">
+            <button onclick="resetView()">Reset View</button>
+            <button id="downloadBtn">Download PNG</button>
+        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
+        const viewport = document.getElementById('viewport');
         const canvas = document.getElementById('pixelCanvas');
         const ctx = canvas.getContext('2d');
         const timerEl = document.getElementById('cooldown-box');
         const totalEl = document.getElementById('total');
         const onlineEl = document.getElementById('online');
         const tooltip = document.getElementById('tooltip');
-        
-        const SIZE = 100;
-        const PIXEL_SIZE = canvas.width / SIZE;
-        let countData = [];
-        let timerInterval;
+        const paletteEl = document.getElementById('palette');
 
-        function startUICountdown(ms) {
-            clearInterval(timerInterval);
-            let remaining = ms;
-            
-            const updateUI = () => {
-                if (remaining <= 0) {
-                    timerEl.innerText = "READY";
-                    timerEl.style.color = "#00ff88";
-                    clearInterval(timerInterval);
-                } else {
-                    timerEl.innerText = `${Math.ceil(remaining / 1000)}s`;
-                    timerEl.style.color = "#ff4444";
-                    remaining -= 100;
-                }
+        const SIZE = 100;
+        const PIXEL_DATA_SIZE = 10; // each grid pixel is 10 actual canvas units
+        let countData = [];
+        let gridData = [];
+        let timerInterval;
+        let selectedColor = "#000000";
+
+        // Camera / Viewport state
+        let camera = { x: 0, y: 0, zoom: 1 };
+        let isDragging = false;
+        let lastMousePos = { x: 0, y: 0 };
+        let dragStartTime = 0;
+
+        const colors = ["#000000", "#FFFFFF", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#800000", "#008000", "#000080", "#808000", "#800080", "#008080", "#808080", "#C0C0C0"];
+
+        // Init Palette
+        colors.forEach((color, i) => {
+            const swatch = document.createElement('div');
+            swatch.className = 'swatch';
+            if (i === 0) swatch.classList.add('active');
+            swatch.style.backgroundColor = color;
+            swatch.onclick = () => {
+                document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+                swatch.classList.add('active');
+                selectedColor = color;
             };
-            updateUI();
-            timerInterval = setInterval(updateUI, 100);
+            paletteEl.appendChild(swatch);
+        });
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = viewport.offsetHeight;
+            render();
+        }
+
+        function resetView() {
+            const worldSize = SIZE * PIXEL_DATA_SIZE;
+            const padding = 0.9;
+            camera.zoom = Math.min(canvas.width / worldSize, canvas.height / worldSize) * padding;
+            camera.x = (canvas.width - worldSize * camera.zoom) / 2;
+            camera.y = (canvas.height - worldSize * camera.zoom) / 2;
+            render();
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(camera.x, camera.y);
+            ctx.scale(camera.zoom, camera.zoom);
+
+            for (let i = 0; i < SIZE * SIZE; i++) {
+                ctx.fillStyle = gridData[i];
+                ctx.fillRect((i % SIZE) * PIXEL_DATA_SIZE, Math.floor(i / SIZE) * PIXEL_DATA_SIZE, PIXEL_DATA_SIZE, PIXEL_DATA_SIZE);
+            }
+            ctx.restore();
+        }
+
+        // Pointer Controls
+        viewport.addEventListener('pointerdown', (e) => {
+            isDragging = true;
+            lastMousePos = { x: e.clientX, y: e.clientY };
+            dragStartTime = Date.now();
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (isDragging) {
+                camera.x += e.clientX - lastMousePos.x;
+                camera.y += e.clientY - lastMousePos.y;
+                lastMousePos = { x: e.clientX, y: e.clientY };
+                render();
+                tooltip.style.display = 'none';
+            } else {
+                showTooltip(e);
+            }
+        });
+
+        window.addEventListener('pointerup', (e) => {
+            if (isDragging && (Date.now() - dragStartTime < 200)) handleCanvasClick(e);
+            isDragging = false;
+        });
+
+        viewport.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = Math.pow(1.1, -e.deltaY / 100);
+            const mouseX = e.clientX - camera.x;
+            const mouseY = (e.clientY - viewport.offsetTop) - camera.y;
+            camera.x -= mouseX * (factor - 1);
+            camera.y -= mouseY * (factor - 1);
+            camera.zoom = Math.min(Math.max(camera.zoom * factor, 0.05), 50);
+            render();
+        }, { passive: false });
+
+        function handleCanvasClick(e) {
+            if (timerEl.innerText !== "READY") return;
+            const worldX = (e.clientX - camera.x) / camera.zoom;
+            const worldY = (e.clientY - viewport.offsetTop - camera.y) / camera.zoom;
+            const col = Math.floor(worldX / PIXEL_DATA_SIZE);
+            const row = Math.floor(worldY / PIXEL_DATA_SIZE);
+            if (col >= 0 && col < SIZE && row >= 0 && row < SIZE) {
+                socket.emit('changeSquare', { index: row * SIZE + col, color: selectedColor });
+            }
+        }
+
+        function showTooltip(e) {
+            const worldX = (e.clientX - camera.x) / camera.zoom;
+            const worldY = (e.clientY - viewport.offsetTop - camera.y) / camera.zoom;
+            const col = Math.floor(worldX / PIXEL_DATA_SIZE);
+            const row = Math.floor(worldY / PIXEL_DATA_SIZE);
+            if (col >= 0 && col < SIZE && row >= 0 && row < SIZE) {
+                tooltip.style.display = 'block';
+                tooltip.style.left = (e.clientX + 15) + 'px';
+                tooltip.style.top = (e.clientY + 15) + 'px';
+                tooltip.innerText = `Changes: ${countData[row * SIZE + col] || 0}`;
+            } else { tooltip.style.display = 'none'; }
         }
 
         socket.on('init', ({ grid, counts, totalChanges, cooldownRemaining }) => {
-            countData = counts;
-            totalEl.innerText = totalChanges;
-            grid.forEach((color, i) => {
-                const x = (i % SIZE) * PIXEL_SIZE;
-                const y = Math.floor(i / SIZE) * PIXEL_SIZE;
-                ctx.fillStyle = color;
-                ctx.fillRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
-            });
-            startUICountdown(cooldownRemaining);
+            gridData = grid; countData = counts; totalEl.innerText = totalChanges;
+            resize(); resetView(); startUICountdown(cooldownRemaining);
         });
 
         socket.on('update', ({ index, color, count, totalChanges }) => {
-            countData[index] = count;
-            totalEl.innerText = totalChanges;
-            const x = (index % SIZE) * PIXEL_SIZE;
-            const y = Math.floor(index / SIZE) * PIXEL_SIZE;
-            ctx.fillStyle = color;
-            ctx.fillRect(x, y, PIXEL_SIZE, PIXEL_SIZE);
+            gridData[index] = color; countData[index] = count; totalEl.innerText = totalChanges; render();
         });
 
         socket.on('startTimer', (ms) => startUICountdown(ms));
         socket.on('userCount', (n) => onlineEl.innerText = n);
 
-        canvas.addEventListener('click', (e) => {
-            if (timerEl.innerText !== "READY") return;
-            const rect = canvas.getBoundingClientRect();
-            const col = Math.floor((e.clientX - rect.left) / (rect.width / SIZE));
-            const row = Math.floor((e.clientY - rect.top) / (rect.height / SIZE));
-            socket.emit('changeSquare', { index: row * SIZE + col, color: document.getElementById('colorPicker').value });
-        });
+        function startUICountdown(ms) {
+            clearInterval(timerInterval);
+            let remaining = ms;
+            const updateUI = () => {
+                if (remaining <= 0) {
+                    timerEl.innerText = "READY"; timerEl.style.color = "#00ff88"; clearInterval(timerInterval);
+                } else {
+                    timerEl.innerText = `${Math.ceil(remaining / 1000)}s`; timerEl.style.color = "#ff4444"; remaining -= 100;
+                }
+            };
+            updateUI(); timerInterval = setInterval(updateUI, 100);
+        }
 
-        // Tooltip logic
-        canvas.addEventListener('mousemove', (e) => {
-            const rect = canvas.getBoundingClientRect();
-            const col = Math.floor((e.clientX - rect.left) / (rect.width / SIZE));
-            const row = Math.floor((e.clientY - rect.top) / (rect.height / SIZE));
-            const index = row * SIZE + col;
+        document.getElementById('downloadBtn').onclick = () => {
+            const temp = document.createElement('canvas');
+            temp.width = temp.height = SIZE * PIXEL_DATA_SIZE;
+            const tCtx = temp.getContext('2d');
+            gridData.forEach((c, i) => {
+                tCtx.fillStyle = c;
+                tCtx.fillRect((i % SIZE) * PIXEL_DATA_SIZE, Math.floor(i / SIZE) * PIXEL_DATA_SIZE, PIXEL_DATA_SIZE, PIXEL_DATA_SIZE);
+            });
+            const link = document.createElement('a');
+            link.download = 'canvas.png'; link.href = temp.toDataURL(); link.click();
+        };
 
-            tooltip.style.display = 'block';
-            tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
-            tooltip.style.top = (e.clientY - rect.top + 15) + 'px';
-            tooltip.innerText = `Changes: ${countData[index] || 0}`;
-        });
-        canvas.addEventListener('mouseleave', () => tooltip.style.display = 'none');
+        window.addEventListener('resize', () => { resize(); resetView(); });
     </script>
 </body>
 </html>
