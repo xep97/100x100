@@ -6,13 +6,45 @@
         body { font-family: sans-serif; text-align: center; background: #1a1a1a; color: #eee; margin: 0; padding: 20px; }
         #cooldown-box { font-size: 2em; font-weight: bold; margin: 10px; height: 1.2em; transition: color 0.3s; }
         #stats { color: #888; margin-bottom: 20px; }
-        #canvas-container { position: relative; display: inline-block; background: white; border: 5px solid #333; }
+        #canvas-container { position: relative; display: inline-block; background: white; border: 5px solid #333; line-height: 0; }
         canvas { image-rendering: pixelated; display: block; cursor: crosshair; }
+        
+        /* Palette Styles */
+        #palette { 
+            display: flex; 
+            justify-content: center; 
+            gap: 5px; 
+            margin-bottom: 20px; 
+            flex-wrap: wrap; 
+            max-width: 600px; 
+            margin-left: auto; 
+            margin-right: auto; 
+        }
+        .swatch { 
+            width: 30px; height: 30px; 
+            border: 2px solid #444; 
+            cursor: pointer; 
+            border-radius: 4px; 
+        }
+        .swatch.active { border-color: white; transform: scale(1.1); }
+
         #tooltip {
             position: absolute; background: rgba(0,0,0,0.9); color: white;
             padding: 5px 10px; border-radius: 4px; pointer-events: none; display: none;
+            z-index: 10; line-height: normal;
         }
-        input[type="color"] { width: 60px; height: 30px; border: none; cursor: pointer; margin-bottom: 10px; }
+
+        button#downloadBtn {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #444;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button#downloadBtn:hover { background: #666; }
     </style>
 </head>
 <body>
@@ -20,12 +52,15 @@
     <div id="cooldown-box">CONNECTING...</div>
     <div id="stats">Total: <span id="total">0</span> | Online: <span id="online">0</span></div>
     
-    <input type="color" id="colorPicker" value="#3498db">
+    <div id="palette"></div>
 
     <div id="canvas-container">
         <canvas id="pixelCanvas" width="600" height="600"></canvas>
         <div id="tooltip"></div>
     </div>
+
+    <br>
+    <button id="downloadBtn">Download Canvas as PNG</button>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
@@ -36,16 +71,47 @@
         const totalEl = document.getElementById('total');
         const onlineEl = document.getElementById('online');
         const tooltip = document.getElementById('tooltip');
+        const paletteEl = document.getElementById('palette');
         
         const SIZE = 100;
         const PIXEL_SIZE = canvas.width / SIZE;
         let countData = [];
         let timerInterval;
+        let selectedColor = "#000000";
+
+        // 16 Color Palette (Standard EGA/CGA style)
+        const colors = [
+            "#000000", "#FFFFFF", "#FF0000", "#00FF00", 
+            "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF",
+            "#800000", "#008000", "#000080", "#808000",
+            "#800080", "#008080", "#808080", "#C0C0C0"
+        ];
+
+        // Initialize Palette UI
+        colors.forEach((color, i) => {
+            const swatch = document.createElement('div');
+            swatch.className = 'swatch';
+            if (i === 0) swatch.classList.add('active');
+            swatch.style.backgroundColor = color;
+            swatch.onclick = () => {
+                document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+                swatch.classList.add('active');
+                selectedColor = color;
+            };
+            paletteEl.appendChild(swatch);
+        });
+
+        // Download Functionality
+        document.getElementById('downloadBtn').onclick = () => {
+            const link = document.createElement('a');
+            link.download = 'pixel-canvas.png';
+            link.href = canvas.toDataURL();
+            link.click();
+        };
 
         function startUICountdown(ms) {
             clearInterval(timerInterval);
             let remaining = ms;
-            
             const updateUI = () => {
                 if (remaining <= 0) {
                     timerEl.innerText = "READY";
@@ -90,10 +156,9 @@
             const rect = canvas.getBoundingClientRect();
             const col = Math.floor((e.clientX - rect.left) / (rect.width / SIZE));
             const row = Math.floor((e.clientY - rect.top) / (rect.height / SIZE));
-            socket.emit('changeSquare', { index: row * SIZE + col, color: document.getElementById('colorPicker').value });
+            socket.emit('changeSquare', { index: row * SIZE + col, color: selectedColor });
         });
 
-        // Tooltip logic
         canvas.addEventListener('mousemove', (e) => {
             const rect = canvas.getBoundingClientRect();
             const col = Math.floor((e.clientX - rect.left) / (rect.width / SIZE));
